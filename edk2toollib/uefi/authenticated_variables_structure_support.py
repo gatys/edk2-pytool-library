@@ -173,6 +173,84 @@ class EfiSignatureDataEfiCertSha256(object):
     def GetTotalSize(self):
         return EfiSignatureDataEfiCertSha256.STATIC_STRUCT_SIZE
 
+#
+# EFI_SIGNATURE_DATA Structure for version record cert
+#
+class EfiSignatureDataEfiCertVersionRecord(object):
+    STATIC_STRUCT_SIZE = 16
+
+    #
+    # decodefs is a filestream object of binary content that is the structure encoded
+    # decodesize is number of bytes to decode as the EFI_SIGNATURE_DATA object (guid + x509 data)
+    # createfs is a filestream object that is the DER encoded x509 cert
+    # sigowner is the uuid object of the signature owner guid
+    def __init__(self, decodefs=None, decodesize=0, createfs=None, sigowner=None):
+        if(decodefs is not None):
+            self.PopulateFromFileStream(decodefs, decodesize)
+        elif(createfs is not None):
+            # create a new one
+            self.SignatureOwner = sigowner
+            start = createfs.tell()  # should be 0 but maybe this filestream has other things at the head
+            createfs.seek(0, 2)
+            end = createfs.tell()
+            createfs.seek(start)
+            self.SignatureDataSize = end - start
+            if(self.SignatureDataSize < 0):
+                raise Exception("Create File Stream has invalid size")
+            self.SignatureData = memoryview(createfs.read(self.SignatureDataSize))
+
+        else:
+            raise Exception("Invalid Parameters - Not Supported")
+
+    def PopulateFromFileStream(self, fs, decodesize):
+        if(fs is None):
+            raise Exception("Invalid File Steam")
+
+        if(decodesize == 0):
+            raise Exception("Invalid Decode Size")
+
+        # only populate from file stream those parts that are complete in the file stream
+        offset = fs.tell()
+        fs.seek(0, 2)
+        end = fs.tell()
+        fs.seek(offset)
+
+        if((end - offset) < EfiSignatureDataEfiCertVersionRecord.STATIC_STRUCT_SIZE):  # size of the  guid
+            raise Exception("Invalid file stream size")
+
+        if((end - offset) < decodesize):  # size requested is too big
+            raise Exception("Invalid file stream size vs decodesize")
+
+        self.SignatureOwner = uuid.UUID(bytes_le=fs.read(16))
+
+        # read remainling decode size for x509 data
+        self.SignatureDataSize = decodesize - EfiSignatureDataEfiCertVersionRecord.STATIC_STRUCT_SIZE
+        self.SignatureData = memoryview(fs.read(self.SignatureDataSize))
+
+    def Print(self):
+        print("EfiSignatureData - EfiSignatureDataEfiCertVersionRecord")
+        print("  Signature Owner:      %s" % str(self.SignatureOwner))
+        print("  Signature Data: ")
+        if(self.SignatureData is None):
+            print("    NONE")
+        else:
+            sdl = self.SignatureData.tolist()
+            if(self.SignatureDataSize != len(sdl)):
+                raise Exception("Invalid Signature Data Size vs Length of data")
+            PrintByteList(sdl)
+
+    def Write(self, fs):
+        if(fs is None):
+            raise Exception("Invalid File Output Stream")
+        if(self.SignatureData is None):
+            raise Exception("Invalid object")
+
+        fs.write(self.SignatureOwner.bytes_le)
+        fs.write(self.SignatureData)
+
+    def GetTotalSize(self):
+        return EfiSignatureDataEfiCertVersionRecord.STATIC_STRUCT_SIZE + self.SignatureDataSize
+
 
 class EfiSignatureHeader(object):
     def __init__(self):
@@ -193,6 +271,7 @@ class EfiSignatureDataFactory(object):
     # EFI_CERT_X509_SHA384_GUID = uuid.UUID("0x7076876e, 0x80c2, 0x4ee6, 0xaa, 0xd2, 0x28, 0xb3, 0x49, 0xa6, 0x86, 0x5b")     # noqa: E501
     # EFI_CERT_X509_SHA512_GUID = uuid.UUID("0x446dbf63, 0x2502, 0x4cda, 0xbc, 0xfa, 0x24, 0x65, 0xd2, 0xb0, 0xfe, 0x9d")     # noqa: E501
     # EFI_CERT_TYPE_PKCS7_GUID = uuid.UUID("0x4aafd29d, 0x68df, 0x49ee, 0x8a, 0xa9, 0x34, 0x7d, 0x37, 0x56, 0x65, 0xa7")
+    EFI_CERT_VERSION_RECORD_GUID = uuid.UUID("9124f01f-8e10-4409-8cda-1156f3c0d480")
 
     #
     # This method is a factory for creating the correct Efi Signature Data object
@@ -210,6 +289,8 @@ class EfiSignatureDataFactory(object):
 
         elif(type == EfiSignatureDataFactory.EFI_CERT_X509_GUID):
             return EfiSignatureDataEfiCertX509(decodefs=fs, decodesize=size)
+        elif(type == EfiSignatureDataFactory.EFI_CERT_VERSION_RECORD_GUID):
+            return EfiSignatureDataEfiCertVersionRecord(decodefs=fs, decodesize=size)
 
         else:
             logging.error("GuidType Value: %s" % type)
